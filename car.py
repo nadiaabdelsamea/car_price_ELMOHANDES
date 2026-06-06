@@ -3,33 +3,33 @@ import pandas as pd
 import numpy as np
 import joblib
 
-# 1. إعدادات الصفحة والعنوان
+# إعدادات الصفحة
 st.set_page_config(page_title="توقع أسعار السيارات 🚗", layout="centered")
 st.title("🚗 تطبيق توقع أسعار السيارات")
-st.write("قم بإدخال مواصفات السيارة للحصول على السعر المتوقع.")
+st.write("قم بإدخال مواصفات السيارة للحصول على السعر المتوقع مباشرة عبر الموديل.")
 
-# 2. تحميل الموديل وقائمة الأعمدة
+# تحميل الموديل فقط مع خاصية الكاش
 @st.cache_resource
-def load_model_artifacts():
+def load_model():
+    # تحميل ملف الموديل الأساسي
     model = joblib.load('car_price_model.pkl')
-    model_columns = joblib.load('model_columns.pkl')
-    return model, model_columns
+    return model
 
 try:
-    model, model_columns = load_model_artifacts()
-except FileNotFoundError:
-    st.error("⚠️ عذراً، لم يتم العثور على ملفات الموديل. تأكد من وجود car_price_model.pkl و model_columns.pkl في نفس الفولدر.")
+    model = load_model()
+    # استخراج أسماء الأعمدة مباشرة من الموديل المسبق التدريب
+    model_columns = list(model.feature_names_in_)
+except Exception as e:
+    st.error("⚠️ فشل تحميل ملف الموديل. تأكد من رفع ملف car_price_model.pkl إلى الـ GitHub بنجاح.")
     st.stop()
 
-# 3. استخراج القيم المتاحة للماركات والموديلات وحجم السيارة من الأعمدة المحفوظة
-# الأعمدة بتبدأ بـ 'make_', 'model_', 'vehicle_size_' بسبب get_dummies
+# استخراج الأسماء النظيفة للماركات والموديلات وحجم السيارة من أعمدة الـ Dummy المستنتجة
 all_makes = sorted(list(set([col.split('make_')[1] for col in model_columns if col.startswith('make_')])))
 all_models = sorted(list(set([col.split('model_')[1] for col in model_columns if col.startswith('model_')])))
 all_sizes = sorted(list(set([col.split('vehicle_size_')[1] for col in model_columns if col.startswith('vehicle_size_')])))
 
-# 4. تصميم واجهة المستخدم لإدخال البيانات (Inputs)
-st.subheader("📋 مواصفات السيارة")
-
+# تصميم الواجهة لإدخال البيانات
+st.subheader("📋 مواصفات السيارة المدخلة")
 col1, col2 = st.columns(2)
 
 with col1:
@@ -46,11 +46,10 @@ with col2:
     city_mpg = st.number_input("استهلاك الوقود داخل المدينة (City MPG)", min_value=5.0, max_value=100.0, value=18.0, step=1.0)
     popularity = st.number_input("الشعبية (Popularity)", min_value=0.0, max_value=10000.0, value=1000.0, step=50.0)
 
-# 5. معالجة البيانات المدخلة لتطابق شكل الـ One-Hot Encoding للموديل
+# عند الضغط على زر التوقع
 if st.button("احسب السعر المتوقع 💰", type="primary"):
-    
-    # إنشاء قاموس ببيانات المستخدم (القيم الرقمية أولاً)
-    input_data = {
+    # تجهيز البيانات الرقمية الأساسية
+    input_df = pd.DataFrame([{
         'year': year,
         'engine_hp': engine_hp,
         'engine_cylinders': engine_cylinders,
@@ -58,32 +57,29 @@ if st.button("احسب السعر المتوقع 💰", type="primary"):
         'highway_mpg': highway_mpg,
         'city_mpg': city_mpg,
         'popularity': popularity
-    }
+    }])
     
-    # تحويله لـ DataFrame من صف واحد
-    input_df = pd.DataFrame([input_data])
+    # بناء الـ One-Hot Encoding ليتطابق مع الـ Features الأصلية للموديل
+    encoded_features = pd.DataFrame(0, index=[0], columns=model_columns)
     
-    # إنشاء أعمدة الـ One-Hot Encoding الافتراضية وإعطائها قيمة 0
-    for col in model_columns:
-        if col not in input_df.columns:
-            input_df[col] = 0
+    # دمج البيانات الرقمية في الجدول الجديد
+    for col in input_df.columns:
+        if col in encoded_features.columns:
+            encoded_features[col] = input_df[col].values
             
-    # تفعيل العمود المناسب للماركة والموديل والحجم اللي اختارهم المستخدم (تغيير قيمتهم لـ 1)
-    if f'make_{make}' in input_df.columns:
-        input_df[f'make_{make}'] = 1
-    if f'model_{model_car}' in input_df.columns:
-        input_df[f'model_{model_car}'] = 1
-    if f'vehicle_size_{vehicle_size}' in input_df.columns:
-        input_df[f'vehicle_size_{vehicle_size}'] = 1
+    # تفعيل خيارات المستخدم وتحويلها لـ 1 (One-Hot)
+    if f'make_{make}' in encoded_features.columns:
+        encoded_features[f'make_{make}'] = 1
+    if f'model_{model_car}' in encoded_features.columns:
+        encoded_features[f'model_{model_car}'] = 1
+    if f'vehicle_size_{vehicle_size}' in encoded_features.columns:
+        encoded_features[f'vehicle_size_{vehicle_size}'] = 1
         
-    # إعادة ترتيب الأعمدة لتطابق تماماً ترتيب أعمدة التدريب
-    input_df = input_df[model_columns]
+    # التنبؤ بالسعر (الناتج يكون Log Price)
+    log_prediction = model.predict(encoded_features)[0]
     
-    # 6. التنبؤ بالسعر (Predict)
-    log_prediction = model.predict(input_df)[0]
-    
-    # بما إنك مدرب الموديل على np.log1p(price)، لازم نعكس العملية بـ np.expm1
+    # تحويل السعر من الـ Log إلى القيمة الفعلية بالدولار
     final_prediction = np.expm1(log_prediction)
     
-    # 7. عرض النتيجة للمستخدم
-    st.success(f"💵 السعر المتوقع للسيارة هو: **${final_prediction:,.2f}**")
+    # عرض النتيجة النهائية للمستخدم
+    st.success(f"💵 السعر المتوقع لهذه السيارة هو: **${final_prediction:,.2f}**")
